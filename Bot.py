@@ -149,7 +149,7 @@ def get_kucoin_symbols():
             syms = [
                 s["baseCurrency"] + "USDT"
                 for s in r.json().get("data", [])
-                if s.get("enableTrading") and s.get("quoteCurrency"] == "USDT"
+                if s.get("enableTrading") and s.get("quoteCurrency") == "USDT"
             ]
             if syms:
                 KU_CACHE["t"] = time.time()
