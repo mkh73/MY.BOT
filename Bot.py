@@ -8,17 +8,17 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = {
-    "CYCLE_SEC": 90,              # 🔧 افزایش از 60 به 90
+    "CYCLE_SEC": 90,
     "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 70,                  #  کاهش از 90 به 70
+    "MIN_P": 70,
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
-    "USE_KUCOIN_LIST": True,
+    "USE_KUCOIN_LIST": False,  # 🔧 تغییر: استفاده از لیست محدود
     "COOLDOWN_AFTER_CLOSE": 900,
     "TG_TOKEN": os.environ.get("TG_TOKEN", ""),
     "TG_CHAT": os.environ.get("TG_CHAT", ""),
-    "CONCURRENCY": 4,             # 🔧 کاهش از 8 به 4
+    "CONCURRENCY": 4,
 }
 
 SES = requests.Session()
@@ -59,9 +59,9 @@ def fmt(x):
     return f"{round(float(x), d):g}"
 
 def card_signal(sym, dir_, entry, tp, sl, p_pct, slot_now, slot_max):
-    arrow = "🟢 LONG" if dir_ == 1 else "🔴 SHORT"
+    arrow = " LONG" if dir_ == 1 else "🔴 SHORT"
     return (
-        f" سیگنال جدید — {sym}\n"
+        f"🎯 سیگنال جدید — {sym}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
         f"📍 ورود:     {fmt(entry)}\n"
@@ -70,11 +70,11 @@ def card_signal(sym, dir_, entry, tp, sl, p_pct, slot_now, slot_max):
         f" احتمال:   {p_pct}%\n"
         f"📂 جای فعال:  {slot_now}/{slot_max}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 روی KuCoin دستی وارد شو"
+        f" روی KuCoin دستی وارد شو"
     )
 
 def card_win(sym, dir_, entry, tp, sl, px):
-    arrow = "🟢 LONG" if dir_ == 1 else "🔴 SHORT"
+    arrow = "🟢 LONG" if dir_ == 1 else " SHORT"
     return (
         f" {sym} — تارگت خورد ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -82,7 +82,7 @@ def card_win(sym, dir_, entry, tp, sl, px):
         f"📍 ورود:     {fmt(entry)}\n"
         f"🎯 تارگت:    {fmt(tp)}  ← HIT\n"
         f"🛡 استاپ:    {fmt(sl)}\n"
-        f"📊 قیمت:     {fmt(px)}\n"
+        f" قیمت:     {fmt(px)}\n"
         f"🔄 جا برای سیگنال جدید باز شد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -93,7 +93,7 @@ def card_loss(sym, dir_, entry, tp, sl, px):
         f"💔 {sym} — استاپ خورد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود:     {fmt(entry)}\n"
+        f" ورود:     {fmt(entry)}\n"
         f"🎯 تارگت:    {fmt(tp)}\n"
         f"🛡 استاپ:    {fmt(sl)}  ← HIT\n"
         f"📊 قیمت:     {fmt(px)}\n"
@@ -104,13 +104,13 @@ def card_loss(sym, dir_, entry, tp, sl, px):
 def card_be(sym, dir_, entry, tp, px):
     arrow = "🟢 LONG" if dir_ == 1 else "🔴 SHORT"
     return (
-        f"🛡 {sym} — Breakeven\n"
+        f" {sym} — Breakeven\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود:     {fmt(entry)}\n"
+        f" ورود:     {fmt(entry)}\n"
         f"🎯 تارگت:    {fmt(tp)}\n"
         f"🛡 استاپ:    {fmt(entry)}  ← MOVED\n"
-        f"📊 قیمت:     {fmt(px)}\n"
+        f" قیمت:     {fmt(px)}\n"
         f"⚡ ریسک صفر شد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -130,9 +130,28 @@ def notify(card, priority="high"):
     else:
         log("⚠ TG_TOKEN یا TG_CHAT تنظیم نشده")
 
+# 🔧 لیست محدود ارزهای اصلی که در بایننس هستند
+MAIN_COINS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "ADAUSDT", "DOGEUSDT", "TRXUSDT", "AVAXUSDT", "LINKUSDT",
+    "DOTUSDT", "MATICUSDT", "LTCUSDT", "UNIUSDT", "ATOMUSDT",
+    "ETCUSDT", "XLMUSDT", "NEARUSDT", "ALGOUSDT", "BCHUSDT",
+    "FILUSDT", "VETUSDT", "ICPUSDT", "APTUSDT", "ARBUSDT",
+    "OPUSDT", "INJUSDT", "SUIUSDT", "SEIUSDT", "TIAUSDT",
+    "WIFUSDT", "PEPEUSDT", "FLOKIUSDT", "BONKUSDT", "WLDUSDT",
+    "RENDERUSDT", "FETUSDT", "AGIXUSDT", "OCEANUSDT", "GRTUSDT",
+    "SANDUSDT", "MANAUSDT", "AXSUSDT", "GALAUSDT", "CHZUSDT",
+    "ENJUSDT", "IMXUSDT", "LDOUSDT", "CRVUSDT", "MKRUSDT",
+]
+
 KU_CACHE = {"t": 0, "list": []}
 
 def get_kucoin_symbols():
+    # 🔧 اگر USE_KUCOIN_LIST=False باشد، از لیست اصلی استفاده کن
+    if not CONFIG["USE_KUCOIN_LIST"]:
+        log(f"📋 استفاده از لیست {len(MAIN_COINS)} ارز اصلی")
+        return MAIN_COINS
+    
     if KU_CACHE["list"] and time.time() - KU_CACHE["t"] < 3600:
         return KU_CACHE["list"]
     try:
@@ -146,14 +165,11 @@ def get_kucoin_symbols():
             if syms:
                 KU_CACHE["t"] = time.time()
                 KU_CACHE["list"] = syms
-                log(f" KuCoin: {len(syms)} ارز USDT بارگذاری شد")
+                log(f"📥 KuCoin: {len(syms)} ارز USDT بارگذاری شد")
                 return syms
     except Exception as e:
         log(f"⚠ خطای KuCoin API: {e}")
-    return KU_CACHE["list"] or [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-        "AVAXUSDT", "LINKUSDT", "DOGEUSDT", "LTCUSDT", "TRXUSDT",
-    ]
+    return KU_CACHE["list"] or MAIN_COINS
 
 def get_price(sym):
     try:
@@ -165,21 +181,17 @@ def get_price(sym):
     return None
 
 def get_klines(sym):
-    """🔧 دریافت کاندل‌ها با مدیریت خطای 451"""
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            # تلاش با Futures API
             u = f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
             r = SES.get(u, timeout=20)
             
-            # 🔧 مدیریت خطای 451
             if r.status_code == 451:
-                log(f" {sym} در بایننس موجود نیست (451) - رد شد")
+                log(f"⚠ {sym} در بایننس موجود نیست (451) - رد شد")
                 raise ValueError(f"451 - {sym} unavailable")
             
             if not r.ok:
-                # تلاش با Spot API
                 u = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
                 r = SES.get(u, timeout=20)
                 
@@ -204,10 +216,10 @@ def get_klines(sym):
             
         except requests.exceptions.HTTPError as e:
             if "451" in str(e):
-                log(f"⚠ {sym} - خطای 451 (مسدود/موجود نیست)")
+                log(f" {sym} - خطای 451 (مسدود/موجود نیست)")
                 raise ValueError(f"451 - {sym}")
             if attempt < max_retries - 1:
-                time.sleep(1)  # انتظار قبل از retry
+                time.sleep(1)
                 continue
             raise
         except Exception as e:
@@ -569,10 +581,9 @@ def scan_one(sym):
             return None
         return {"s": sym, "sig": analyze(rows)}
     except Exception as e:
-        # 🔧 لاگ کردن خطا
         err_msg = str(e)
         if "451" in err_msg:
-            return None  # ارزهای مسدود را skip کن
+            return None
         log(f"⚠ خطا در اسکن {sym}: {err_msg[:50]}")
         return None
 
@@ -607,7 +618,7 @@ def monitor_active():
                 log(f" {sym} → تارگت خورد | جا خالی شد")
             elif out == "BE":
                 notify(card_be(sym, a["dir"], a["entry"], a["tp"], px))
-                log(f" {sym} → BE بسته شد | جا خالی شد")
+                log(f"🛡 {sym} → BE بسته شد | جا خالی شد")
             else:
                 notify(card_loss(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
                 log(f"💔 {sym} → استاپ خورد | جا خالی شد")
@@ -625,12 +636,11 @@ def scan_and_fill():
     syms = get_kucoin_symbols()
     if not syms:
         return
-    log(f" اسکن {len(syms)} ارز KuCoin | جاهای خالی: {slots}")
+    log(f"🔍 اسکن {len(syms)} ارز | جاهای خالی: {slots}")
     with ThreadPoolExecutor(max_workers=CONFIG["CONCURRENCY"]) as ex:
         res_all = list(ex.map(scan_one, syms))
     res = [r for r in res_all if r]
     
-    # 🔧 لاگ دقیق‌تر برای دیباگ
     qual = sorted(
         [r for r in res if r["sig"]["dir"] and round(r["sig"]["p"] * 100) >= CONFIG["MIN_P"]],
         key=lambda r: -r["sig"]["p"]
@@ -681,7 +691,7 @@ def cycle():
     if S["active"]:
         parts = []
         for a in S["active"]:
-            tag = "" if a["dir"] == 1 else "🔴"
+            tag = "🟢" if a["dir"] == 1 else "🔴"
             parts.append(f"{tag}{a['sym'].replace('USDT', '')} @ {fmt(a.get('px'))}")
         log("ACTIVE: " + " | ".join(parts))
 
@@ -693,7 +703,8 @@ if __name__ == "__main__":
         f"📂 سقف فعال:    {CONFIG['TOP_N']}\n"
         f"🔓 فعال فعلی:    {len(S['active'])}\n"
         f"📊 حداقل احتمال: {CONFIG['MIN_P']}%\n"
-        "🔄 سیگنال جدید فقط با جای خالی\n"
+        f"📋 لیست: {'KuCoin کامل' if CONFIG['USE_KUCOIN_LIST'] else '50 ارز اصلی'}\n"
+        " سیگنال جدید فقط با جای خالی\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     try:
