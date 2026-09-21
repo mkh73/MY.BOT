@@ -11,7 +11,7 @@ CONFIG = {
     "CYCLE_SEC": 60,
     "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 90,
+    "MIN_P": 70,          # 🔧 تغییر از 90 به 70 (۹۰٪ خیلی سخت‌گیرانه است)
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
     "USE_KUCOIN_LIST": True,
@@ -118,15 +118,17 @@ def card_be(sym, dir_, entry, tp, px):
 def notify(card, priority="high"):
     if CONFIG["TG_TOKEN"] and CONFIG["TG_CHAT"]:
         try:
-            SES.post(
+            res = SES.post(
                 f"https://api.telegram.org/bot{CONFIG['TG_TOKEN']}/sendMessage",
                 json={"chat_id": CONFIG["TG_CHAT"], "text": card},
                 timeout=10,
             )
+            if not res.ok:
+                log(f"❌ خطای تلگرام: {res.text}")
         except Exception as e:
             log(f"TG ERR {e}")
     else:
-        log("TG_TOKEN یا TG_CHAT تنظیم نشده")
+        log("⚠ TG_TOKEN یا TG_CHAT تنظیم نشده")
 
 KU_CACHE = {"t": 0, "list": []}
 
@@ -144,26 +146,18 @@ def get_kucoin_symbols():
             if syms:
                 KU_CACHE["t"] = time.time()
                 KU_CACHE["list"] = syms
-                log(f"📥 KuCoin: {len(syms)} ارز USDT")
+                log(f"📥 KuCoin: {len(syms)} ارز USDT بارگذاری شد")
                 return syms
     except Exception as e:
         log(f"⚠ خطای KuCoin API: {e}")
     return KU_CACHE["list"] or [
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
         "AVAXUSDT", "LINKUSDT", "DOGEUSDT", "LTCUSDT", "TRXUSDT",
-        "UNIUSDT", "ATOMUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
-        "SUIUSDT", "INJUSDT", "APTUSDT", "DOTUSDT", "FILUSDT",
     ]
 
 def get_price(sym):
     try:
         r = SES.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}", timeout=10)
-        if r.ok:
-            return float(r.json()["price"])
-    except Exception:
-        pass
-    try:
-        r = SES.get(f"https://api.binance.com/api/v3/ticker/price?symbol={sym}", timeout=10)
         if r.ok:
             return float(r.json()["price"])
     except Exception:
@@ -539,7 +533,9 @@ def scan_one(sym):
         if atrPct < CONFIG["MIN_ATR_PCT"] or rng12 < 0.15 * atrV:
             return None
         return {"s": sym, "sig": analyze(rows)}
-    except Exception:
+    except Exception as e:
+        # 🔧 تغییر: لاگ کردن خطا به جای پنهان کردن آن
+        log(f"⚠ خطا در اسکن {sym}: {str(e)[:50]}")
         return None
 
 def monitor_active():
@@ -595,11 +591,13 @@ def scan_and_fill():
     with ThreadPoolExecutor(max_workers=CONFIG["CONCURRENCY"]) as ex:
         res_all = list(ex.map(scan_one, syms))
     res = [r for r in res_all if r]
+    
+    # 🔧 تغییر: لاگ دقیق‌تر برای دیباگ
     qual = sorted(
         [r for r in res if r["sig"]["dir"] and round(r["sig"]["p"] * 100) >= CONFIG["MIN_P"]],
         key=lambda r: -r["sig"]["p"]
     )
-    log(f"✔ {len(res)} تحلیل | واجد ≥{CONFIG['MIN_P']}%: {len(qual)}")
+    log(f"✔ {len(res)} تحلیل موفق | واجد شرایط (احتمال ≥{CONFIG['MIN_P']}%): {len(qual)} مورد")
 
     active_syms = {a["sym"] for a in S["active"]}
     for q in qual:
@@ -656,6 +654,7 @@ if __name__ == "__main__":
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📂 سقف فعال:    {CONFIG['TOP_N']}\n"
         f"🔓 فعال فعلی:    {len(S['active'])}\n"
+        f"📊 حداقل احتمال: {CONFIG['MIN_P']}%\n"
         "🔄 سیگنال جدید فقط با جای خالی\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━"
     )
