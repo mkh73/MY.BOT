@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 import os
 import time
 import json
@@ -12,20 +11,17 @@ CONFIG = {
     "CYCLE_SEC": 60,
     "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 70,
-    "MIN_QVOL": 1_000_000,
-    "MIN_ATR_PCT": 0.05,
+    "MIN_P": 90,
+    "MIN_QVOL": 5_000_000,
+    "MIN_ATR_PCT": 0.1,
+    "USE_KUCOIN_LIST": True,
     "COOLDOWN_AFTER_CLOSE": 900,
     "TG_TOKEN": os.environ.get("TG_TOKEN", ""),
     "TG_CHAT": os.environ.get("TG_CHAT", ""),
-    "CONCURRENCY": 2,
+    "CONCURRENCY": 8,
 }
 
 SES = requests.Session()
-SES.headers.update({
-    "User-Agent": "Mozilla/5.0 (compatible; SignalBot/1.0)"
-})
-
 SF = "state_kucoin.json"
 NAN = float("nan")
 ISN = math.isnan
@@ -44,7 +40,8 @@ def save():
         pass
 
 def log(m):
-    print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
+    line = f"[{time.strftime('%H:%M:%S')}] {m}"
+    print(line, flush=True)
 
 def fmt(x):
     if x is None or (isinstance(x, float) and ISN(x)):
@@ -121,62 +118,76 @@ def card_be(sym, dir_, entry, tp, px):
 def notify(card, priority="high"):
     if CONFIG["TG_TOKEN"] and CONFIG["TG_CHAT"]:
         try:
-            r = SES.post(
+            SES.post(
                 f"https://api.telegram.org/bot{CONFIG['TG_TOKEN']}/sendMessage",
                 json={"chat_id": CONFIG["TG_CHAT"], "text": card},
                 timeout=10,
             )
-            if not r.ok:
-                log(f"TG ERR {r.status_code}: {r.text[:120]}")
         except Exception as e:
             log(f"TG ERR {e}")
     else:
         log("TG_TOKEN یا TG_CHAT تنظیم نشده")
 
-def get_symbols():
-    return [
+KU_CACHE = {"t": 0, "list": []}
+
+def get_kucoin_symbols():
+    if KU_CACHE["list"] and time.time() - KU_CACHE["t"] < 3600:
+        return KU_CACHE["list"]
+    try:
+        r = SES.get("https://api.kucoin.com/api/v1/symbols", timeout=15)
+        if r.ok:
+            syms = [
+                s["baseCurrency"] + "USDT"
+                for s in r.json().get("data", [])
+                if s.get("enableTrading") and s.get("quoteCurrency") == "USDT"
+            ]
+            if syms:
+                KU_CACHE["t"] = time.time()
+                KU_CACHE["list"] = syms
+                log(f"📥 KuCoin: {len(syms)} ارز USDT")
+                return syms
+    except Exception as e:
+        log(f"⚠ خطای KuCoin API: {e}")
+    return KU_CACHE["list"] or [
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
-        "LTCUSDT", "TRXUSDT", "NEARUSDT", "ATOMUSDT", "UNIUSDT",
-        "ARBUSDT", "OPUSDT", "SUIUSDT", "INJUSDT", "APTUSDT",
-        "FILUSDT", "AAVEUSDT", "LDOUSDT", "PEPEUSDT", "WIFUSDT",
+        "AVAXUSDT", "LINKUSDT", "DOGEUSDT", "LTCUSDT", "TRXUSDT",
+        "UNIUSDT", "ATOMUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT",
+        "SUIUSDT", "INJUSDT", "APTUSDT", "DOTUSDT", "FILUSDT",
     ]
 
 def get_price(sym):
-    for base in [
-        f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}",
-        f"https://api.binance.com/api/v3/ticker/price?symbol={sym}",
-    ]:
-        try:
-            r = SES.get(base, timeout=10)
-            if r.ok:
-                return float(r.json()["price"])
-        except Exception:
-            pass
+    try:
+        r = SES.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}", timeout=10)
+        if r.ok:
+            return float(r.json()["price"])
+    except Exception:
+        pass
+    try:
+        r = SES.get(f"https://api.binance.com/api/v3/ticker/price?symbol={sym}", timeout=10)
+        if r.ok:
+            return float(r.json()["price"])
+    except Exception:
+        pass
     return None
 
 def get_klines(sym):
-    for base in [
-        f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250",
-        f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250",
-    ]:
-        try:
-            r = SES.get(base, timeout=20)
-            if not r.ok:
-                continue
-            rows = [{
-                "t": int(k[0]),
-                "o": float(k[1]),
-                "h": float(k[2]),
-                "l": float(k[3]),
-                "c": float(k[4]),
-                "v": float(k[5]),
-            } for k in r.json()]
-            if len(rows) >= 120:
-                return rows
-        except Exception:
-            continue
-    raise ValueError(sym)
+    u = f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
+    r = SES.get(u, timeout=20)
+    if not r.ok:
+        u = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
+        r = SES.get(u, timeout=20)
+    r.raise_for_status()
+    rows = [{
+        "t": int(k[0]),
+        "o": float(k[1]),
+        "h": float(k[2]),
+        "l": float(k[3]),
+        "c": float(k[4]),
+        "v": float(k[5]),
+    } for k in r.json()]
+    if len(rows) < 120:
+        raise ValueError(sym)
+    return rows
 
 def sma(v, n):
     out = [NAN] * len(v)
@@ -507,7 +518,6 @@ def analyze(rows):
     return {"dir": dir_, "pb": pb, "entry": px, "sl": sl, "tp": tp, "be": be, "ds": ds, "p": pShield, "px": px}
 
 def scan_one(sym):
-    time.sleep(0.12)
     try:
         rows = get_klines(sym)
         n = len(rows)
@@ -529,8 +539,7 @@ def scan_one(sym):
         if atrPct < CONFIG["MIN_ATR_PCT"] or rng12 < 0.15 * atrV:
             return None
         return {"s": sym, "sig": analyze(rows)}
-    except Exception as e:
-        log(f"scan fail {sym}: {type(e).__name__}")
+    except Exception:
         return None
 
 def monitor_active():
@@ -561,13 +570,13 @@ def monitor_active():
         if out:
             if out == "WIN":
                 notify(card_win(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
-                log(f"🎯 {sym} → تارگت خورد")
+                log(f"🎯 {sym} → تارگت خورد | جا خالی شد")
             elif out == "BE":
                 notify(card_be(sym, a["dir"], a["entry"], a["tp"], px))
-                log(f"🛡 {sym} → BE بسته شد")
+                log(f"🛡 {sym} → BE بسته شد | جا خالی شد")
             else:
                 notify(card_loss(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
-                log(f"💔 {sym} → استاپ خورد")
+                log(f"💔 {sym} → استاپ خورد | جا خالی شد")
             S["history"].insert(0, {"sym": a["sym"], "out": out, "t": time.time()})
             S["history"] = S["history"][:200]
             S["cool"][a["sym"]] = time.time() + CONFIG["COOLDOWN_AFTER_CLOSE"]
@@ -577,10 +586,12 @@ def monitor_active():
 def scan_and_fill():
     slots = CONFIG["TOP_N"] - len(S["active"])
     if slots <= 0:
-        log(f"📂 ظرفیت پر: {len(S['active'])}/{CONFIG['TOP_N']}")
+        log(f"📂 ظرفیت پر: {len(S['active'])}/{CONFIG['TOP_N']} فعال — اسکن جدید متوقف")
         return
-    syms = get_symbols()
-    log(f"🔍 اسکن {len(syms)} نماد | جا خالی: {slots}")
+    syms = get_kucoin_symbols()
+    if not syms:
+        return
+    log(f"🔍 اسکن {len(syms)} ارز KuCoin | جاهای خالی: {slots}")
     with ThreadPoolExecutor(max_workers=CONFIG["CONCURRENCY"]) as ex:
         res_all = list(ex.map(scan_one, syms))
     res = [r for r in res_all if r]
@@ -588,7 +599,7 @@ def scan_and_fill():
         [r for r in res if r["sig"]["dir"] and round(r["sig"]["p"] * 100) >= CONFIG["MIN_P"]],
         key=lambda r: -r["sig"]["p"]
     )
-    log(f"✔ تحلیل موفق: {len(res)} | واجد ≥{CONFIG['MIN_P']}%: {len(qual)}")
+    log(f"✔ {len(res)} تحلیل | واجد ≥{CONFIG['MIN_P']}%: {len(qual)}")
 
     active_syms = {a["sym"] for a in S["active"]}
     for q in qual:
@@ -623,7 +634,7 @@ def scan_and_fill():
             used,
             CONFIG["TOP_N"]
         ))
-        log(f"🎯 NEW {key} {'LONG' if s['dir'] == 1 else 'SHORT'} @ {fmt(s['px'])}")
+        log(f"🎯 NEW {key} {'LONG' if s['dir'] == 1 else 'SHORT'} @ {fmt(s['px'])} | فعال: {used}/{CONFIG['TOP_N']}")
         active_syms.add(key)
         slots -= 1
     save()
@@ -632,17 +643,20 @@ def cycle():
     monitor_active()
     scan_and_fill()
     if S["active"]:
-        parts = [f"{'🟢' if a['dir'] == 1 else '🔴'}{a['sym'].replace('USDT', '')}" for a in S["active"]]
+        parts = []
+        for a in S["active"]:
+            tag = "🟢" if a["dir"] == 1 else "🔴"
+            parts.append(f"{tag}{a['sym'].replace('USDT', '')} @ {fmt(a.get('px'))}")
         log("ACTIVE: " + " | ".join(parts))
 
 if __name__ == "__main__":
-    log(f"🤖 ASI KuCoin v2 ▶ سقف {CONFIG['TOP_N']} | فعال: {len(S['active'])}")
+    log(f"🤖 ASI KuCoin v2 ▶ سقف {CONFIG['TOP_N']} پوزیشن فعال | فعال فعلی: {len(S['active'])}")
     notify(
         "🤖 ASI KuCoin v2\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📂 سقف فعال: {CONFIG['TOP_N']}\n"
-        f"🔓 فعال فعلی: {len(S['active'])}\n"
-        "🔄 نسخه Railway — لیست نماد محدود\n"
+        f"📂 سقف فعال:    {CONFIG['TOP_N']}\n"
+        f"🔓 فعال فعلی:    {len(S['active'])}\n"
+        "🔄 سیگنال جدید فقط با جای خالی\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     try:
@@ -656,4 +670,4 @@ if __name__ == "__main__":
             time.sleep(max(5, CONFIG["CYCLE_SEC"] - elapsed))
     except KeyboardInterrupt:
         save()
-        log("⏸ خاموش شد")
+        log("⏸ خاموش شد — وضعیت ذخیره شد")
