@@ -12,7 +12,7 @@ CONFIG = {
     "CYCLE_SEC": 60,
     "TF": "15min",
     "TOP_N": 3,
-    "MIN_P": 90,
+    "MIN_P": 80,
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
     "USE_KUCOIN_LIST": True,
@@ -23,6 +23,13 @@ CONFIG = {
 }
 
 SES = requests.Session()
+# اضافه کردن هدر مرورگر برای جلوگیری از بلاک شدن توسط صرافی
+SES.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+})
+
 SF = "state_kucoin.json"
 NAN = float("nan")
 ISN = math.isnan
@@ -142,7 +149,7 @@ def get_kucoin_symbols():
             syms = [
                 s["baseCurrency"] + "USDT"
                 for s in r.json().get("data", [])
-                if s.get("enableTrading") and s.get("quoteCurrency") == "USDT"
+                if s.get("enableTrading") and s.get("quoteCurrency"] == "USDT"
             ]
             if syms:
                 KU_CACHE["t"] = time.time()
@@ -193,7 +200,6 @@ def get_klines(sym):
     if res.get("code") != "200000" or not res.get("data"):
         raise ValueError(f"Invalid KuCoin klines for {sym}")
     
-    # KuCoin format: [time, open, high, low, close, volume, turnover]
     rows = []
     for k in res["data"]:
         rows.append({
