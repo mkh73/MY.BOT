@@ -15,7 +15,7 @@ CONFIG = {
     "CYCLE_SEC": 60,
     "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 90,
+    "MIN_P": 60,
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
     "USE_KUCOIN_LIST": True,
