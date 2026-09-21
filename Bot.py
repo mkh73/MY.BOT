@@ -1,4 +1,4 @@
-#!/usr/init/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
@@ -6,13 +6,16 @@ import time
 import json
 import math
 import requests
+import http.server
+import socketserver
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = {
     "CYCLE_SEC": 60,
-    "TF": "15min",
+    "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 80,
+    "MIN_P": 90,
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
     "USE_KUCOIN_LIST": True,
@@ -23,24 +26,15 @@ CONFIG = {
 }
 
 SES = requests.Session()
-# اضافه کردن هدر مرورگر برای جلوگیری از بلاک شدن توسط صرافی
-SES.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-})
-
 SF = "state_kucoin.json"
 NAN = float("nan")
 ISN = math.isnan
-S = {"active": [], "history": [], "cool": {}}
 
+S = {"active": [], "history": [], "cool": {}}
 try:
-    if os.path.exists(SF):
-        S.update(json.load(open(SF)))
+    S.update(json.load(open(SF)))
 except Exception:
     pass
-
 S.setdefault("active", [])
 
 def save():
@@ -74,11 +68,11 @@ def card_signal(sym, dir_, entry, tp, sl, p_pct, slot_now, slot_max):
         f"🎯 سیگنال جدید — {sym}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود: {fmt(entry)}\n"
-        f"🎯 تارگت: {fmt(tp)}\n"
-        f"🛡 استاپ: {fmt(sl)}\n"
-        f"📊 احتمال: {p_pct}%\n"
-        f"📂 جای فعال: {slot_now}/{slot_max}\n"
+        f"📍 ورود:     {fmt(entry)}\n"
+        f"🎯 تارگت:    {fmt(tp)}\n"
+        f"🛡 استاپ:    {fmt(sl)}\n"
+        f"📊 احتمال:   {p_pct}%\n"
+        f"📂 جای فعال:  {slot_now}/{slot_max}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💡 روی KuCoin دستی وارد شو"
     )
@@ -89,10 +83,10 @@ def card_win(sym, dir_, entry, tp, sl, px):
         f"🎯 {sym} — تارگت خورد ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود: {fmt(entry)}\n"
-        f"🎯 تارگت: {fmt(tp)} ← HIT\n"
-        f"🛡 استاپ: {fmt(sl)}\n"
-        f"📊 قیمت: {fmt(px)}\n"
+        f"📍 ورود:     {fmt(entry)}\n"
+        f"🎯 تارگت:    {fmt(tp)}  ← HIT\n"
+        f"🛡 استاپ:    {fmt(sl)}\n"
+        f"📊 قیمت:     {fmt(px)}\n"
         f"🔄 جا برای سیگنال جدید باز شد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -103,10 +97,10 @@ def card_loss(sym, dir_, entry, tp, sl, px):
         f"💔 {sym} — استاپ خورد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود: {fmt(entry)}\n"
-        f"🎯 تارگت: {fmt(tp)}\n"
-        f"🛡 استاپ: {fmt(sl)} ← HIT\n"
-        f"📊 قیمت: {fmt(px)}\n"
+        f"📍 ورود:     {fmt(entry)}\n"
+        f"🎯 تارگت:    {fmt(tp)}\n"
+        f"🛡 استاپ:    {fmt(sl)}  ← HIT\n"
+        f"📊 قیمت:     {fmt(px)}\n"
         f"🔄 جا برای سیگنال جدید باز شد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -117,10 +111,10 @@ def card_be(sym, dir_, entry, tp, px):
         f"🛡 {sym} — Breakeven\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
-        f"📍 ورود: {fmt(entry)}\n"
-        f"🎯 تارگت: {fmt(tp)}\n"
-        f"🛡 استاپ: {fmt(entry)} ← MOVED\n"
-        f"📊 قیمت: {fmt(px)}\n"
+        f"📍 ورود:     {fmt(entry)}\n"
+        f"🎯 تارگت:    {fmt(tp)}\n"
+        f"🛡 استاپ:    {fmt(entry)}  ← MOVED\n"
+        f"📊 قیمت:     {fmt(px)}\n"
         f"⚡ ریسک صفر شد\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -165,52 +159,36 @@ def get_kucoin_symbols():
         "SUIUSDT", "INJUSDT", "APTUSDT", "DOTUSDT", "FILUSDT",
     ]
 
-def to_kucoin_symbol(sym):
-    if "-" in sym:
-        return sym
-    if sym.endswith("USDT"):
-        return f"{sym[:-4]}-USDT"
-    return sym
-
 def get_price(sym):
     try:
-        ksym = to_kucoin_symbol(sym)
-        r = SES.get(f"https://api.kucoin.com/api/v1/market/orderbook/level1?symbol={ksym}", timeout=10)
+        r = SES.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={sym}", timeout=10)
         if r.ok:
-            res = r.json()
-            if res.get("code") == "200000" and res.get("data") and res["data"].get("price"):
-                return float(res["data"]["price"])
+            return float(r.json()["price"])
+    except Exception:
+        pass
+    try:
+        r = SES.get(f"https://api.binance.com/api/v3/ticker/price?symbol={sym}", timeout=10)
+        if r.ok:
+            return float(r.json()["price"])
     except Exception:
         pass
     return None
 
 def get_klines(sym):
-    ksym = to_kucoin_symbol(sym)
-    tf = CONFIG.get("TF", "15min")
-    tf_map = {
-        "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min", 
-        "30m": "30min", "1h": "1hour", "2h": "2hour", "4h": "4hour", 
-        "6h": "6hour", "8h": "8hour", "12h": "12hour", "1d": "1day"
-    }
-    ku_tf = tf_map.get(tf, "15min")
-    u = f"https://api.kucoin.com/api/v1/market/candles?symbol={ksym}&type={ku_tf}"
+    u = f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
     r = SES.get(u, timeout=20)
+    if not r.ok:
+        u = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
+        r = SES.get(u, timeout=20)
     r.raise_for_status()
-    res = r.json()
-    if res.get("code") != "200000" or not res.get("data"):
-        raise ValueError(f"Invalid KuCoin klines for {sym}")
-    
-    rows = []
-    for k in res["data"]:
-        rows.append({
-            "t": int(k[0]),
-            "o": float(k[1]),
-            "h": float(k[2]),
-            "l": float(k[3]),
-            "c": float(k[4]),
-            "v": float(k[5]),
-        })
-    rows.sort(key=lambda x: x["t"])
+    rows = [{
+        "t": int(k[0]),
+        "o": float(k[1]),
+        "h": float(k[2]),
+        "l": float(k[3]),
+        "c": float(k[4]),
+        "v": float(k[5]),
+    } for k in r.json()]
     if len(rows) < 120:
         raise ValueError(sym)
     return rows
@@ -419,14 +397,14 @@ def analyze(rows):
     bearSweep = ((sC["h"] > poolHigh or pC["h"] > poolHigh) and sC["c"] < poolHigh and sC["c"] < sC["o"])
     ab = sma([abs(r["c"] - r["o"]) for r in rows], 20)[n - 2] or atrV * 0.5
     fvgs, ob = fvgF(rows), obF(rows, ab)
-    
+
     def tz(d):
         for i in range(n - 6, n - 1):
             for g in fvgs:
                 if g["dir"] == d and rows[i]["l"] <= g["top"] + 0.1 * atrV and rows[i]["l"] >= g["bot"] - 0.1 * atrV:
-                    if ob and ob["dir"] == d and rows[i]["l"] <= ob["top"] + 0.1 * atrV and rows[i]["l"] >= ob["bot"] - 0.1 * atrV:
-                        return 1
                     return 1
+            if ob and ob["dir"] == d and rows[i]["l"] <= ob["top"] + 0.1 * atrV and rows[i]["l"] >= ob["bot"] - 0.1 * atrV:
+                return 1
         return 0
 
     cr = (sC["h"] - sC["l"]) or 1e-12
@@ -434,7 +412,6 @@ def analyze(rows):
     bP = (min(sC["o"], sC["c"]) - sC["l"]) >= 2 * abs(sC["c"] - sC["o"]) and sC["c"] > sC["o"]
     sE = sC["c"] < sC["o"] and pC["c"] > pC["o"] and sC["c"] < pC["o"] and sC["o"] >= pC["c"]
     sP = (sC["h"] - max(sC["o"], sC["c"])) >= 2 * abs(sC["c"] - sC["o"]) and sC["c"] < sC["o"]
-    
     trig = 0
     if bE or bP or (sC["c"] > sC["o"] and sC["c"] > pC["h"]):
         trig = 2
@@ -444,47 +421,39 @@ def analyze(rows):
         trig = 1
     elif sC["c"] < sC["o"] and sC["c"] <= sC["h"] - 0.5 * cr:
         trig = -1
-        
     bullT, bearT, strong = trig > 0, trig < 0, abs(trig) == 2
     disp = abs(sC["c"] - sC["o"]) > 1.5 * ab
     volX = cavg and not ISN(cavg) and cvol > cavg * 1.4
-    
     dir_, pb = 0, ""
     if bullSweep and bullT:
         dir_, pb = 1, "SWEEP"
     elif bearSweep and bearT:
         dir_, pb = -1, "SWEEP"
-        
     if not dir_ and (regime == "TREND" or er > 0.25):
         if structure == "BULL" and bullT and (tz(1) or strong):
             dir_, pb = 1, "PULLBACK"
         if not dir_ and structure == "BEAR" and bearT and (tz(-1) or strong):
             dir_, pb = -1, "PULLBACK"
-            
     if not dir_ and regime != "RANGE" and (disp or volX):
         if sC["c"] > lsh and bullT:
             dir_, pb = 1, "BOS"
         elif sC["c"] < lsl and bearT:
             dir_, pb = -1, "BOS"
-            
     if not dir_ and regime != "TREND" and bullT and rangePos <= 0.4:
         dir_, pb = 1, "FADE"
-    elif not dir_ and regime != "TREND" and bearT and rangePos >= 0.6:
+    if not dir_ and regime != "TREND" and bearT and rangePos >= 0.6:
         dir_, pb = -1, "FADE"
-        
     if not dir_ and (volX or disp):
         d2 = 1 if sC["c"] > sC["o"] else (-1 if sC["c"] < sC["o"] else 0)
         d3 = 1 if pC["c"] > pC["o"] else (-1 if pC["c"] < pC["o"] else 0)
         if d2 and d2 == d3 and not (d2 == 1 and structure == "BEAR") and not (d2 == -1 and structure == "BULL"):
             dir_, pb = d2, "CONT"
-            
     if not dir_ and not ISN(vwap):
         dv = px - vwap
         if dv < -2 * atrV and bullT:
             dir_, pb = 1, "VWAP"
         elif dv > 2 * atrV and bearT:
             dir_, pb = -1, "VWAP"
-            
     if not dir_:
         w = 0.0
         if structure == "BULL":
@@ -502,7 +471,6 @@ def analyze(rows):
             dir_, pb = 1, "HYBRID"
         elif w < -0.5:
             dir_, pb = -1, "HYBRID"
-            
     r3l, r3h = math.inf, -math.inf
     for i in range(n - 3, n):
         r3l = min(r3l, rows[i]["l"])
@@ -511,7 +479,6 @@ def analyze(rows):
         dir_ = 0
     if dir_ == -1 and px > r3h:
         dir_ = 0
-        
     sl = tp = be = None
     ds = 0.0
     if dir_:
@@ -531,7 +498,6 @@ def analyze(rows):
         dt = max(dt, 0.5 * ds)
         tp = px + dt if dir_ > 0 else px - dt
         be = px + 0.35 * ds if dir_ > 0 else px - 0.35 * ds
-        
     m = 30
     diffs = [c[i] - c[i - 1] for i in range(n - m, n)]
     mean8 = sum(c[i] - c[i - 1] for i in range(n - 8, n)) / 8
@@ -550,7 +516,7 @@ def analyze(rows):
         fit = (regime == "TREND" and pb in ("PULLBACK", "BOS", "CONT")) or \
               (regime == "RANGE" and pb in ("FADE", "SWEEP", "VWAP")) or pb in ("SWEEP", "HYBRID")
         mu += 0.06 * sd if fit else -0.08 * sd
-    mu = max(-0.25 * sd, min(0.45 * sd, mu))
+        mu = max(-0.25 * sd, min(0.45 * sd, mu))
     spread = 0.0006 * px
     pShield = pBarrier(mu, sd, abs(px - sl) + spread, abs(be - px) - spread) if dir_ else 0.0
     return {"dir": dir_, "pb": pb, "entry": px, "sl": sl, "tp": tp, "be": be, "ds": ds, "p": pShield, "px": px}
@@ -587,13 +553,14 @@ def monitor_active():
             continue
         a["px"] = px
         sym = a["sym"].replace("USDT", "")
+
         if not a.get("beOn") and a.get("be"):
             if (a["dir"] == 1 and px >= a["be"]) or (a["dir"] == -1 and px <= a["be"]):
                 a["sl"] = a["entry"]
                 a["beOn"] = True
                 log(f"🛡 {sym}: BE فعال شد")
                 notify(card_be(sym, a["dir"], a["entry"], a["tp"], px))
-        
+
         out = None
         if a["dir"] == 1 and px >= a["tp"]:
             out = "WIN"
@@ -603,7 +570,7 @@ def monitor_active():
             out = "BE" if a.get("beOn") else "LOSS"
         elif a["dir"] == -1 and px >= a["sl"]:
             out = "BE" if a.get("beOn") else "LOSS"
-            
+
         if out:
             if out == "WIN":
                 notify(card_win(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
@@ -637,7 +604,7 @@ def scan_and_fill():
         key=lambda r: -r["sig"]["p"]
     )
     log(f"✔ {len(res)} تحلیل | واجد ≥{CONFIG['MIN_P']}%: {len(qual)}")
-    
+
     active_syms = {a["sym"] for a in S["active"]}
     for q in qual:
         if slots <= 0:
@@ -662,13 +629,19 @@ def scan_and_fill():
         })
         used = len(S["active"])
         notify(card_signal(
-            key.replace("USDT", ""), s["dir"], s["px"], s["tp"], s["sl"],
-            round(s["p"] * 100), used, CONFIG["TOP_N"]
+            key.replace("USDT", ""),
+            s["dir"],
+            s["px"],
+            s["tp"],
+            s["sl"],
+            round(s["p"] * 100),
+            used,
+            CONFIG["TOP_N"]
         ))
         log(f"🎯 NEW {key} {'LONG' if s['dir'] == 1 else 'SHORT'} @ {fmt(s['px'])} | فعال: {used}/{CONFIG['TOP_N']}")
         active_syms.add(key)
         slots -= 1
-        save()
+    save()
 
 def cycle():
     monitor_active()
@@ -680,13 +653,35 @@ def cycle():
             parts.append(f"{tag}{a['sym'].replace('USDT', '')} @ {fmt(a.get('px'))}")
         log("ACTIVE: " + " | ".join(parts))
 
+# وب‌سرور سبک برای باز نگه داشتن پورت در رایلی
+class HealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active and running!")
+    def log_message(self, format, *args):
+        return
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    try:
+        with socketserver.TCPServer(("", port), HealthHandler) as httpd:
+            log(f"🌐 وب‌سرور پورت {port} را روی رایلی فعال نگه داشت")
+            httpd.serve_forever()
+    except Exception as e:
+        log(f"⚠ خطای وب‌سرور: {e}")
+
 if __name__ == "__main__":
+    # ۱. اجرای وب‌سرور در پس‌زمینه برای اینکه رایلی پورت را بسته نبیند
+    t_web = threading.Thread(target=run_web_server, daemon=True)
+    t_web.start()
+
     log(f"🤖 ASI KuCoin v2 ▶ سقف {CONFIG['TOP_N']} پوزیشن فعال | فعال فعلی: {len(S['active'])}")
     notify(
         "🤖 ASI KuCoin v2\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📂 سقف فعال: {CONFIG['TOP_N']}\n"
-        f"🔓 فعال فعلی: {len(S['active'])}\n"
+        f"📂 سقف فعال:    {CONFIG['TOP_N']}\n"
+        f"🔓 فعال فعلی:    {len(S['active'])}\n"
         "🔄 سیگنال جدید فقط با جای خالی\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━"
     )
