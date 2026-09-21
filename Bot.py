@@ -8,17 +8,17 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 CONFIG = {
-    "CYCLE_SEC": 60,
+    "CYCLE_SEC": 90,              # 🔧 افزایش از 60 به 90
     "TF": "15m",
     "TOP_N": 3,
-    "MIN_P": 70,          # 🔧 تغییر از 90 به 70 (۹۰٪ خیلی سخت‌گیرانه است)
+    "MIN_P": 70,                  #  کاهش از 90 به 70
     "MIN_QVOL": 5_000_000,
     "MIN_ATR_PCT": 0.1,
     "USE_KUCOIN_LIST": True,
     "COOLDOWN_AFTER_CLOSE": 900,
     "TG_TOKEN": os.environ.get("TG_TOKEN", ""),
     "TG_CHAT": os.environ.get("TG_CHAT", ""),
-    "CONCURRENCY": 8,
+    "CONCURRENCY": 4,             # 🔧 کاهش از 8 به 4
 }
 
 SES = requests.Session()
@@ -61,13 +61,13 @@ def fmt(x):
 def card_signal(sym, dir_, entry, tp, sl, p_pct, slot_now, slot_max):
     arrow = "🟢 LONG" if dir_ == 1 else "🔴 SHORT"
     return (
-        f"🎯 سیگنال جدید — {sym}\n"
+        f" سیگنال جدید — {sym}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
         f"📍 ورود:     {fmt(entry)}\n"
         f"🎯 تارگت:    {fmt(tp)}\n"
         f"🛡 استاپ:    {fmt(sl)}\n"
-        f"📊 احتمال:   {p_pct}%\n"
+        f" احتمال:   {p_pct}%\n"
         f"📂 جای فعال:  {slot_now}/{slot_max}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💡 روی KuCoin دستی وارد شو"
@@ -76,7 +76,7 @@ def card_signal(sym, dir_, entry, tp, sl, p_pct, slot_now, slot_max):
 def card_win(sym, dir_, entry, tp, sl, px):
     arrow = "🟢 LONG" if dir_ == 1 else "🔴 SHORT"
     return (
-        f"🎯 {sym} — تارگت خورد ✅\n"
+        f" {sym} — تارگت خورد ✅\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{arrow}\n"
         f"📍 ورود:     {fmt(entry)}\n"
@@ -146,7 +146,7 @@ def get_kucoin_symbols():
             if syms:
                 KU_CACHE["t"] = time.time()
                 KU_CACHE["list"] = syms
-                log(f"📥 KuCoin: {len(syms)} ارز USDT بارگذاری شد")
+                log(f" KuCoin: {len(syms)} ارز USDT بارگذاری شد")
                 return syms
     except Exception as e:
         log(f"⚠ خطای KuCoin API: {e}")
@@ -165,23 +165,58 @@ def get_price(sym):
     return None
 
 def get_klines(sym):
-    u = f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
-    r = SES.get(u, timeout=20)
-    if not r.ok:
-        u = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
-        r = SES.get(u, timeout=20)
-    r.raise_for_status()
-    rows = [{
-        "t": int(k[0]),
-        "o": float(k[1]),
-        "h": float(k[2]),
-        "l": float(k[3]),
-        "c": float(k[4]),
-        "v": float(k[5]),
-    } for k in r.json()]
-    if len(rows) < 120:
-        raise ValueError(sym)
-    return rows
+    """🔧 دریافت کاندل‌ها با مدیریت خطای 451"""
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            # تلاش با Futures API
+            u = f"https://fapi.binance.com/fapi/v1/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
+            r = SES.get(u, timeout=20)
+            
+            # 🔧 مدیریت خطای 451
+            if r.status_code == 451:
+                log(f" {sym} در بایننس موجود نیست (451) - رد شد")
+                raise ValueError(f"451 - {sym} unavailable")
+            
+            if not r.ok:
+                # تلاش با Spot API
+                u = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={CONFIG['TF']}&limit=250"
+                r = SES.get(u, timeout=20)
+                
+                if r.status_code == 451:
+                    log(f" {sym} در بایننس موجود نیست (451) - رد شد")
+                    raise ValueError(f"451 - {sym} unavailable")
+                    
+            r.raise_for_status()
+            rows = [{
+                "t": int(k[0]),
+                "o": float(k[1]),
+                "h": float(k[2]),
+                "l": float(k[3]),
+                "c": float(k[4]),
+                "v": float(k[5]),
+            } for k in r.json()]
+            
+            if len(rows) < 120:
+                raise ValueError(f"{sym} - داده ناکافی")
+                
+            return rows
+            
+        except requests.exceptions.HTTPError as e:
+            if "451" in str(e):
+                log(f"⚠ {sym} - خطای 451 (مسدود/موجود نیست)")
+                raise ValueError(f"451 - {sym}")
+            if attempt < max_retries - 1:
+                time.sleep(1)  # انتظار قبل از retry
+                continue
+            raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            raise
+    
+    raise Exception(f"{sym} - تمام تلاش‌ها ناموفق بود")
 
 def sma(v, n):
     out = [NAN] * len(v)
@@ -534,8 +569,11 @@ def scan_one(sym):
             return None
         return {"s": sym, "sig": analyze(rows)}
     except Exception as e:
-        # 🔧 تغییر: لاگ کردن خطا به جای پنهان کردن آن
-        log(f"⚠ خطا در اسکن {sym}: {str(e)[:50]}")
+        # 🔧 لاگ کردن خطا
+        err_msg = str(e)
+        if "451" in err_msg:
+            return None  # ارزهای مسدود را skip کن
+        log(f"⚠ خطا در اسکن {sym}: {err_msg[:50]}")
         return None
 
 def monitor_active():
@@ -566,10 +604,10 @@ def monitor_active():
         if out:
             if out == "WIN":
                 notify(card_win(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
-                log(f"🎯 {sym} → تارگت خورد | جا خالی شد")
+                log(f" {sym} → تارگت خورد | جا خالی شد")
             elif out == "BE":
                 notify(card_be(sym, a["dir"], a["entry"], a["tp"], px))
-                log(f"🛡 {sym} → BE بسته شد | جا خالی شد")
+                log(f" {sym} → BE بسته شد | جا خالی شد")
             else:
                 notify(card_loss(sym, a["dir"], a["entry"], a["tp"], a["sl"], px))
                 log(f"💔 {sym} → استاپ خورد | جا خالی شد")
@@ -582,17 +620,17 @@ def monitor_active():
 def scan_and_fill():
     slots = CONFIG["TOP_N"] - len(S["active"])
     if slots <= 0:
-        log(f"📂 ظرفیت پر: {len(S['active'])}/{CONFIG['TOP_N']} فعال — اسکن جدید متوقف")
+        log(f" ظرفیت پر: {len(S['active'])}/{CONFIG['TOP_N']} فعال — اسکن جدید متوقف")
         return
     syms = get_kucoin_symbols()
     if not syms:
         return
-    log(f"🔍 اسکن {len(syms)} ارز KuCoin | جاهای خالی: {slots}")
+    log(f" اسکن {len(syms)} ارز KuCoin | جاهای خالی: {slots}")
     with ThreadPoolExecutor(max_workers=CONFIG["CONCURRENCY"]) as ex:
         res_all = list(ex.map(scan_one, syms))
     res = [r for r in res_all if r]
     
-    # 🔧 تغییر: لاگ دقیق‌تر برای دیباگ
+    # 🔧 لاگ دقیق‌تر برای دیباگ
     qual = sorted(
         [r for r in res if r["sig"]["dir"] and round(r["sig"]["p"] * 100) >= CONFIG["MIN_P"]],
         key=lambda r: -r["sig"]["p"]
@@ -643,12 +681,12 @@ def cycle():
     if S["active"]:
         parts = []
         for a in S["active"]:
-            tag = "🟢" if a["dir"] == 1 else "🔴"
+            tag = "" if a["dir"] == 1 else "🔴"
             parts.append(f"{tag}{a['sym'].replace('USDT', '')} @ {fmt(a.get('px'))}")
         log("ACTIVE: " + " | ".join(parts))
 
 if __name__ == "__main__":
-    log(f"🤖 ASI KuCoin v2 ▶ سقف {CONFIG['TOP_N']} پوزیشن فعال | فعال فعلی: {len(S['active'])}")
+    log(f" ASI KuCoin v2 ▶ سقف {CONFIG['TOP_N']} پوزیشن فعال | فعال فعلی: {len(S['active'])}")
     notify(
         "🤖 ASI KuCoin v2\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━\n"
